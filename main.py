@@ -3,15 +3,29 @@ Entry point — choose game mode and start.
 
 Usage examples:
   python main.py daily
-  python main.py daily --size 6
+  python main.py daily --size 6 --solver entropy
   python main.py random
-  python main.py random --size 6 --seed 42
-  python main.py word --answer crane
+  python main.py random --size 6 --solver minimax
+  python main.py word --answer crane --solver entropy
+
+Solvers:
+  random   Pick a random candidate (default, fast)
+  entropy  Maximise expected information gain each guess
+  minimax  Minimise the worst-case remaining pool each guess
 """
 
 import argparse
 import random
 from game import play_daily, play_random, play_word
+
+SOLVER_CHOICES = ["random", "entropy", "minimax"]
+
+
+def _add_solver_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--solver", choices=SOLVER_CHOICES, default="random", metavar="SOLVER",
+        help=f"Guessing strategy: {', '.join(SOLVER_CHOICES)} (default: random)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,14 +36,20 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Modes:
   daily   Guess today's daily puzzle (same answer for a given size each day)
-  random  Guess a random puzzle (use --seed to fix the answer for reproducibility)
+  random  Guess a random puzzle (seed is random in 0–2047 unless --seed is given)
   word    Guess a custom answer (use --answer to specify; useful for debugging)
+
+Solvers:
+  random   Pick a random candidate — fast, no strategy (default)
+  entropy  Maximise expected information gain each guess
+  minimax  Minimise the worst-case remaining pool each guess
 
 Examples:
   python main.py daily
-  python main.py daily --size 6
-  python main.py random --seed 42
-  python main.py word --answer crane
+  python main.py daily --size 6 --solver entropy
+  python main.py random --solver minimax
+  python main.py random --seed 7 --solver minimax
+  python main.py word --answer crane --solver entropy
         """,
     )
 
@@ -41,6 +61,7 @@ Examples:
         "--size", type=int, default=5, metavar="N",
         help="Word length (default: 5)",
     )
+    _add_solver_arg(p_daily)
 
     # random
     p_random = subparsers.add_parser("random", help="Guess a random puzzle")
@@ -50,8 +71,9 @@ Examples:
     )
     p_random.add_argument(
         "--seed", type=int, default=None, metavar="SEED",
-        help="Random seed; fixed seed gives same puzzle (default: random)",
+        help="Random seed in 0–2047; omit to pick a random seed each run",
     )
+    _add_solver_arg(p_random)
 
     # word
     p_word = subparsers.add_parser("word", help="Guess a custom answer word (for debugging)")
@@ -59,6 +81,7 @@ Examples:
         "--answer", type=str, required=True, metavar="WORD",
         help="The answer word to guess",
     )
+    _add_solver_arg(p_word)
 
     return parser
 
@@ -68,15 +91,15 @@ def main():
     args = parser.parse_args()
 
     if args.mode == "daily":
-        play_daily(size=args.size)
+        play_daily(size=args.size, solver_name=args.solver)
 
     elif args.mode == "random":
-        seed = args.seed if args.seed is not None else random.randint(1, 99999)
+        seed = args.seed if args.seed is not None else random.randint(0, 2047)
         print(f"Seed for this game = {seed} (use --seed {seed} to reproduce)")
-        play_random(size=args.size, seed=seed)
+        play_random(size=args.size, seed=seed, solver_name=args.solver)
 
     elif args.mode == "word":
-        play_word(answer=args.answer.lower())
+        play_word(answer=args.answer.lower(), solver_name=args.solver)
 
 
 if __name__ == "__main__":
