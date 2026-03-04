@@ -1,0 +1,67 @@
+# ================================================================
+# config.toml — Centralised configuration for the Wordle solver
+#
+# Each parameter is annotated with the script(s) that read it and
+# a description of what it controls.
+# ================================================================
+
+# ----------------------------------------------------------------
+# [api]  Parameters consumed by api_client.py
+# ----------------------------------------------------------------
+[api]
+
+# Root URL of the Wordle REST API.
+base_url = "https://wordle.votee.dev:8000"
+
+# Set to false because the server's SSL certificate has expired.
+# Switch to true in production once a valid certificate is in place.
+verify_ssl = false
+
+# How many times to retry a request after a 5xx response or connection
+# failure before propagating the exception to the caller.
+# Retries use exponential back-off: retry_backoff × 2^(attempt-1).
+max_retries = 3
+
+# Base back-off delay in seconds before the first retry.
+# Sequence of actual waits: 1 s → 2 s → 4 s …
+retry_backoff = 1.0
+
+# ----------------------------------------------------------------
+# [game]  Parameters consumed by game.py  and  benchmark.py
+# ----------------------------------------------------------------
+[game]
+
+# Hard cap on the number of guesses allowed per game.
+# Standard Wordle allows 6; 16 gives the random solver enough headroom
+# that it almost never fails while still catching genuine solver bugs.
+max_attempts = 16
+
+# ----------------------------------------------------------------
+# [solver]  Parameters consumed by solver.py
+# ----------------------------------------------------------------
+[solver]
+
+# Maximum candidate pool size that EntropySolver / MinimaxSolver will
+# score exhaustively.  When the live pool exceeds this threshold, a
+# random sub-sample of this size is evaluated instead.
+# Effect on runtime: per-guess cost grows as O(eval_limit²).
+# Raise for better accuracy (slower); lower for faster benchmarks.
+eval_limit = 300
+
+# ----------------------------------------------------------------
+# [benchmark]  Parameters consumed by benchmark.py
+# ----------------------------------------------------------------
+[benchmark]
+
+# Ordered list of solver names to include in each benchmark run.
+# Must match the keys registered in solver.SOLVERS.
+solvers = ["random", "entropy", "minimax"]
+
+# Re-compute the first guess every this many games.
+# Independent of batch_size: changing concurrency does not affect how
+# often the first guess is refreshed.
+# With the default games=1024 and recompute_every=256, the first guess is
+# computed 4 times per run, averaging over multiple samples and reducing
+# cross-run variance caused by the solver's internal randomness.
+# Set to 0 to compute the first guess only once for all games.
+first_guess_recompute_games = 256

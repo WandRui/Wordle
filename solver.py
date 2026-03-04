@@ -13,7 +13,7 @@ sub-sample is evaluated to keep runtime reasonable.
 import math
 import random
 
-_EVAL_LIMIT = 300  # max candidates to score; randomly sample if pool is larger
+from config import EVAL_LIMIT as _EVAL_LIMIT
 
 
 

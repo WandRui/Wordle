@@ -12,11 +12,10 @@ in the fallback set (because it must satisfy the very constraints the API return
 import itertools
 import string
 
+from config import MAX_ATTEMPTS
 from constraint import ConstraintManager
 from solver import get_solver
 import api_client
-
-MAX_ATTEMPTS = 16
 
 
 def _print_feedback(attempt: int, guess: str, feedback: list[dict]) -> None:

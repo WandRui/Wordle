@@ -1,0 +1,53 @@
+Loading 5-letter words from words.txt …
+  15,921 words loaded.
+
+Benchmark: 1024 games × 3 solvers  |  batch=128  |  word size=5  |  first-guess recompute=every 256 games
+============================================================
+
+▶  RANDOM solver
+  Pre-computing first guess (group 1/4) … 'kumis'
+  [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 256/1024  Pre-computing first guess (group 2/4) … 'adorn'
+  [████████████████████░░░░░░░░░░░░░░░░░░░░] 512/1024  Pre-computing first guess (group 3/4) … 'unset'
+  [██████████████████████████████░░░░░░░░░░] 768/1024  Pre-computing first guess (group 4/4) … 'taipi'
+  [████████████████████████████████████████] 1024/1024
+
+  Solver : random
+  Played : 1024  |  Solved: 1005 (98.1%)  |  Failed: 19
+  Avg    : 5.437 guesses
+  Dist   : 2×9  3×84  4×236  5×316  6×181  7×74  8×33  9×20  10×14  11×14  12×5  13×6  14×5  15×8
+  Time   : 88.7s  (0.09s/game)
+
+▶  ENTROPY solver
+  Pre-computing first guess (group 1/4) … 'lears'
+  [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 256/1024  Pre-computing first guess (group 2/4) … 'ariel'
+  [████████████████████░░░░░░░░░░░░░░░░░░░░] 512/1024  Pre-computing first guess (group 3/4) … 'stoae'
+  [██████████████████████████████░░░░░░░░░░] 768/1024  Pre-computing first guess (group 4/4) … 'cares'
+  [████████████████████████████████████████] 1024/1024
+
+  Solver : entropy
+  Played : 1024  |  Solved: 1010 (98.6%)  |  Failed: 14
+  Avg    : 4.851 guesses
+  Dist   : 2×17  3×157  4×374  5×260  6×91  7×39  8×18  9×15  10×4  11×4  12×11  13×4  14×9  15×5  16×2
+  Time   : 256.8s  (0.25s/game)
+
+▶  MINIMAX solver
+  Pre-computing first guess (group 1/4) … 'nares'
+  [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 256/1024  Pre-computing first guess (group 2/4) … 'saice'
+  [████████████████████░░░░░░░░░░░░░░░░░░░░] 512/1024  Pre-computing first guess (group 3/4) … 'tarse'
+  [██████████████████████████████░░░░░░░░░░] 768/1024  Pre-computing first guess (group 4/4) … 'rased'
+  [████████████████████████████████████████] 1024/1024
+
+  Solver : minimax
+  Played : 1024  |  Solved: 1014 (99.0%)  |  Failed: 10
+  Avg    : 5.043 guesses
+  Dist   : 2×14  3×146  4×342  5×256  6×118  7×56  8×22  9×12  10×4  11×8  12×9  13×11  14×7  15×5  16×4
+  Time   : 264.5s  (0.26s/game)
+
+============================================================
+FINAL RANKING  (average guesses, lower is better)
+
+  🥇  #1  entropy   4.851 avg guesses
+  🥈  #2  minimax   5.043 avg guesses
+  🥉  #3  random    5.437 avg guesses
+
+Total wall time: 610.0s

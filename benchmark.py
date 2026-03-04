@@ -20,11 +20,10 @@ from collections import Counter
 from pathlib import Path
 
 import api_client
+from config import FIRST_GUESS_RECOMPUTE_GAMES, MAX_ATTEMPTS, SOLVERS
 from constraint import ConstraintManager
 from solver import get_solver
 
-MAX_ATTEMPTS = 16
-SOLVERS = ["random", "entropy", "minimax"]
 WORDS_FILE = Path(__file__).parent / "words.txt"
 
 
@@ -118,33 +117,44 @@ def run_solver_benchmark(
     seeds: list[int],
     size: int,
     batch_size: int,
+    recompute_every: int,
 ) -> list[int | None]:
-    """Submit all games for one solver to the thread pool; return results in seed order."""
-    # Pre-compute the first guess once in the main thread.
-    # All 1024 games share the same initial candidate list, so the best first word
-    # is identical for every game.  Without this, 32 threads would each run an
-    # O(N²) entropy/minimax computation concurrently — but Python's GIL serialises
-    # CPU-bound work, so they'd actually queue up and stall the progress bar.
-    print("  Pre-computing first guess … ", end="", flush=True)
-    first_solver = get_solver(solver_name)
-    first_guess = first_solver.pick(list(words))
-    print(f"'{first_guess}'")
+    """Submit all games for one solver to the thread pool; return results in seed order.
 
+    recompute_every controls how many games share the same pre-computed first guess.
+    It is expressed in games, not batches, so changing batch_size does not affect
+    how often the first guess is refreshed.  Set to 0 to compute only once.
+    The final group may contain fewer games than recompute_every; that is fine
+    because ThreadPoolExecutor accepts any number of tasks regardless of max_workers.
+    """
     n = len(seeds)
     results: list[int | None] = [None] * n
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as pool:
-        future_map = {
-            pool.submit(run_game, words, solver_name, seed, size, first_guess): idx
-            for idx, seed in enumerate(seeds)
-        }
+    # group_size is in games; recompute_every=0 means one computation for all games.
+    group_size = recompute_every if recompute_every > 0 else n
 
-        completed = 0
-        for future in concurrent.futures.as_completed(future_map):
-            idx = future_map[future]
-            results[idx] = future.result()
-            completed += 1
-            _print_progress(completed, n)
+    completed = 0
+    group_starts = list(range(0, n, group_size))
+    n_groups = len(group_starts)
+
+    for g_num, group_start in enumerate(group_starts, start=1):
+        group_indices = list(range(group_start, min(group_start + group_size, n)))
+
+        group_label = f" (group {g_num}/{n_groups})" if n_groups > 1 else ""
+        print(f"  Pre-computing first guess{group_label} … ", end="", flush=True)
+        first_guess = get_solver(solver_name).pick(list(words))
+        print(f"'{first_guess}'")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as pool:
+            future_map = {
+                pool.submit(run_game, words, solver_name, seeds[idx], size, first_guess): idx
+                for idx in group_indices
+            }
+            for future in concurrent.futures.as_completed(future_map):
+                idx = future_map[future]
+                results[idx] = future.result()
+                completed += 1
+                _print_progress(completed, n)
 
     print()  # newline after progress bar
     return results
@@ -191,12 +201,34 @@ def print_solver_stats(solver_name: str, results: list[int | None], elapsed: flo
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Benchmark Wordle solvers with parallel /random API games",
+        description=(
+            "Benchmark all Wordle solvers (random / entropy / minimax) by running them "
+            "in parallel against the /random API endpoint.  All solvers play the same "
+            "seeds so the comparison is apples-to-apples.  Results include solve rate, "
+            "average guesses, attempt distribution, and wall time."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--size",  type=int, default=5,    help="Word length")
-    parser.add_argument("--games", type=int, default=1024, help="Games per solver")
-    parser.add_argument("--batch", type=int, default=64,   help="Concurrent workers")
+    parser.add_argument(
+        "--size", type=int, default=5,
+        help="Length of the target word (must match words in words.txt).",
+    )
+    parser.add_argument(
+        "--games", type=int, default=1024,
+        help="Number of games (seeds 0 … N-1) each solver will play.",
+    )
+    parser.add_argument(
+        "--batch", type=int, default=64,
+        help="Maximum number of games running concurrently in the thread pool.",
+    )
+    parser.add_argument(
+        "--recompute", type=int, default=FIRST_GUESS_RECOMPUTE_GAMES,
+        help=(
+            "Re-compute the first guess every this many games (independent of --batch). "
+            "0 = compute once for all games (original behaviour). "
+            "Reducing this value averages over more first-guess samples, lowering cross-run variance."
+        ),
+    )
     args = parser.parse_args()
 
     print(f"Loading {args.size}-letter words from {WORDS_FILE.name} …")
@@ -206,8 +238,10 @@ def main() -> None:
     # All solvers play the same seeds → fair comparison
     seeds = list(range(args.games))
 
+    recompute_label = f"every {args.recompute} games" if args.recompute > 0 else "once"
     print(f"Benchmark: {args.games} games × {len(SOLVERS)} solvers"
-          f"  |  batch={args.batch}  |  word size={args.size}")
+          f"  |  batch={args.batch}  |  word size={args.size}"
+          f"  |  first-guess recompute={recompute_label}")
     print("=" * 60)
 
     summary: dict[str, float] = {}
@@ -216,7 +250,7 @@ def main() -> None:
     for solver_name in SOLVERS:
         print(f"\n▶  {solver_name.upper()} solver")
         t0 = time.perf_counter()
-        results = run_solver_benchmark(solver_name, words, seeds, args.size, args.batch)
+        results = run_solver_benchmark(solver_name, words, seeds, args.size, args.batch, args.recompute)
         elapsed = time.perf_counter() - t0
         avg = print_solver_stats(solver_name, results, elapsed)
         summary[solver_name] = avg
