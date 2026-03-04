@@ -121,8 +121,7 @@ def _run_game(guess_fn, size: int, solver_name: str = "random") -> None:
 def _load_words(size: int) -> list[str]:
     """Load words of the given length from the word list file."""
     with open("words.txt", "r") as f:
-        words = [line.strip().lower() for line in f if line.strip()]
-    filtered = [w for w in words if len(w) == size]
+        filtered = [w for line in f if len(w := line.strip().lower()) == size]
     if not filtered:
         raise ValueError(f"No words of length {size} in word list; check words.txt")
     return filtered

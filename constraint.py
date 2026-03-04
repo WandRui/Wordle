@@ -17,6 +17,10 @@ class ConstraintManager:
         # Letters that must not be at a given position, e.g. {1: {'a', 'e'}}
         self.not_at: dict[int, set[str]] = {}
 
+        # Cached result of (absent - present); updated in update() so is_candidate()
+        # doesn't recompute the set difference on every call during filter_candidates().
+        self._truly_absent: set[str] = set()
+
     def update(self, feedback: list[dict]) -> None:
         """Update constraints from one round of API feedback."""
         for item in feedback:
@@ -37,6 +41,8 @@ class ConstraintManager:
                 # (it means no extra of that letter at this position). For simplicity we add to absent here.
                 self.absent.add(letter)
 
+        self._truly_absent = self.absent - self.present  # refresh cache
+
     def is_candidate(self, word: str) -> bool:
         """Check whether a word satisfies all current constraints."""
         # 1. correct: specified positions must match
@@ -45,8 +51,7 @@ class ConstraintManager:
                 return False
 
         # 2. absent: word must not contain these letters (excluding those already correct/present)
-        truly_absent = self.absent - self.present
-        if any(letter in word for letter in truly_absent):
+        if any(letter in word for letter in self._truly_absent):
             return False
 
         # 3. present: word must contain these letters

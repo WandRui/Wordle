@@ -12,39 +12,59 @@ sub-sample is evaluated to keep runtime reasonable.
 
 import math
 import random
-from collections import Counter
 
 _EVAL_LIMIT = 300  # max candidates to score; randomly sample if pool is larger
 
 
-def _simulate_feedback(guess: str, answer: str) -> tuple:
-    """Return a feedback pattern tuple matching Wordle rules."""
+
+def _precompute_answer_counts(candidates: list[str]) -> list[list[int]]:
+    """Pre-compute per-letter frequency arrays for every candidate word.
+
+    Called once per solver.pick() invocation so that _pattern_distribution does not
+    rebuild the frequency array for the same answer on every guess in the pool.
+    """
+    precomp: list[list[int]] = []
+    for word in candidates:
+        counts = [0] * 26
+        for c in word:
+            counts[ord(c) - 97] += 1
+        precomp.append(counts)
+    return precomp
+
+
+def _pattern_distribution(guess: str, candidates: list[str],
+                           precomp: list[list[int]]) -> dict[int, int]:
+    """Return {pattern: count} mapping for this guess against every candidate.
+
+    Uses pre-computed answer letter counts to avoid re-building them for each
+    (guess, answer) pair.  The guess letter indices are also pre-computed once
+    per call, saving repeated ord() calls inside the inner loop.
+    """
+    dist: dict[int, int] = {}
     size = len(guess)
-    result = ["absent"] * size
-    answer_counts: dict[str, int] = {}
-    for c in answer:
-        answer_counts[c] = answer_counts.get(c, 0) + 1
+    gi = [ord(c) - 97 for c in guess]   # guess letter indices, computed once per guess
 
-    # First pass: mark correct positions
-    for i in range(size):
-        if guess[i] == answer[i]:
-            result[i] = "correct"
-            answer_counts[guess[i]] -= 1
+    for j, answer in enumerate(candidates):
+        result = bytearray(size)
+        counts = precomp[j][:]           # fast 26-element list copy; modified in-place below
 
-    # Second pass: mark present (right letter, wrong position)
-    for i in range(size):
-        if result[i] == "absent" and answer_counts.get(guess[i], 0) > 0:
-            result[i] = "present"
-            answer_counts[guess[i]] -= 1
+        for i in range(size):            # first pass: correct
+            if guess[i] == answer[i]:
+                result[i] = 2
+                counts[gi[i]] -= 1
 
-    return tuple(result)
+        for i in range(size):            # second pass: present
+            if result[i] == 0 and counts[gi[i]] > 0:
+                result[i] = 1
+                counts[gi[i]] -= 1
 
+        pat = 0
+        for v in result:
+            pat = pat * 3 + v
 
-def _pattern_distribution(guess: str, candidates: list[str]) -> Counter:
-    counts: Counter = Counter()
-    for answer in candidates:
-        counts[_simulate_feedback(guess, answer)] += 1
-    return counts
+        dist[pat] = dist.get(pat, 0) + 1
+
+    return dist
 
 
 class RandomSolver:
@@ -70,12 +90,16 @@ class EntropySolver:
             return candidates[0]
 
         pool = candidates if len(candidates) <= _EVAL_LIMIT else random.sample(candidates, _EVAL_LIMIT)
+        precomp = _precompute_answer_counts(candidates)
         best_word, best_score = pool[0], -1.0
         total = len(candidates)
+        log_total = math.log2(total)    # hoisted: same for every guess in this round
 
         for guess in pool:
-            dist = _pattern_distribution(guess, candidates)
-            entropy = -sum((c / total) * math.log2(c / total) for c in dist.values())
+            dist = _pattern_distribution(guess, candidates, precomp)
+            # Equivalent to -sum(p*log2(p)), but avoids one division per bucket:
+            # H = log2(N) - (1/N) * sum(c * log2(c))
+            entropy = log_total - sum(c * math.log2(c) for c in dist.values()) / total
             if entropy > best_score:
                 best_score, best_word = entropy, guess
 
@@ -94,10 +118,11 @@ class MinimaxSolver:
             return candidates[0]
 
         pool = candidates if len(candidates) <= _EVAL_LIMIT else random.sample(candidates, _EVAL_LIMIT)
+        precomp = _precompute_answer_counts(candidates)
         best_word, best_score = pool[0], float("inf")
 
         for guess in pool:
-            dist = _pattern_distribution(guess, candidates)
+            dist = _pattern_distribution(guess, candidates, precomp)
             worst_case = max(dist.values())
             if worst_case < best_score:
                 best_score, best_word = worst_case, guess
