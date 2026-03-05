@@ -1,6 +1,22 @@
 """
-Constraint Manager — maintains constraints from API feedback and filters candidate words.
+Constraint Manager — maintains constraints from API feedback, filters candidate
+words, and provides fallback candidate generation when the word list is exhausted.
 """
+
+import itertools
+import string
+from pathlib import Path
+
+WORDS_FILE = Path(__file__).parent / "words.txt"
+
+
+def load_words(size: int) -> list[str]:
+    """Load all words of the given length from the shared word list."""
+    with WORDS_FILE.open() as f:
+        words = [w for line in f if len(w := line.strip().lower()) == size]
+    if not words:
+        raise ValueError(f"No {size}-letter words found in {WORDS_FILE}")
+    return words
 
 
 class ConstraintManager:
@@ -68,3 +84,24 @@ class ConstraintManager:
     def filter_candidates(self, candidates: list[str]) -> list[str]:
         """Filter the candidate list to words that satisfy the constraints."""
         return [word for word in candidates if self.is_candidate(word)]
+
+    def generate_fallback_candidates(self, size: int) -> list[str]:
+        """Enumerate every letter-string of length `size` that satisfies current constraints.
+
+        Called when the word list has no matching candidates left.  Uses Cartesian
+        product over per-position valid letters so the answer is always reachable,
+        even if it is absent from words.txt.
+        """
+        alphabet = set(string.ascii_lowercase)
+        position_options: list[list[str]] = []
+        for i in range(size):
+            if i in self.correct:
+                position_options.append([self.correct[i]])
+            else:
+                forbidden = self._truly_absent | self.not_at.get(i, set())
+                position_options.append(sorted(alphabet - forbidden))
+        return [
+            "".join(combo)
+            for combo in itertools.product(*position_options)
+            if all(letter in combo for letter in self.present)
+        ]

@@ -9,11 +9,8 @@ constraints, then continues guessing from that set.  The answer is always guaran
 in the fallback set (because it must satisfy the very constraints the API returned).
 """
 
-import itertools
-import string
-
-from config import MAX_ATTEMPTS
-from constraint import ConstraintManager
+from config import MAX_ATTEMPTS, get_first_guess
+from constraint import ConstraintManager, load_words
 from solver import get_solver
 import api_client
 
@@ -60,47 +57,25 @@ def play_word(answer: str, solver_name: str = "random") -> None:
     )
 
 
-def _generate_fallback_candidates(constraints: ConstraintManager, size: int) -> list[str]:
-    """Enumerate every letter-string of length `size` that satisfies current constraints.
-
-    Works by computing valid letters for each position, then taking the Cartesian product
-    and keeping only combinations that contain all required "present" letters.
-    The answer is always among the results, so the game can continue even when words.txt
-    has no matching entry.
-    """
-    alphabet = set(string.ascii_lowercase)
-    truly_absent = constraints.absent - constraints.present
-
-    position_options: list[list[str]] = []
-    for i in range(size):
-        if i in constraints.correct:
-            position_options.append([constraints.correct[i]])
-        else:
-            forbidden = truly_absent | constraints.not_at.get(i, set())
-            position_options.append(sorted(alphabet - forbidden))
-
-    return [
-        "".join(combo)
-        for combo in itertools.product(*position_options)
-        if all(letter in combo for letter in constraints.present)
-    ]
-
-
 def _run_game(guess_fn, size: int, solver_name: str = "random") -> None:
     """Generic game loop; guess_fn encapsulates which API to call."""
-    candidates = _load_words(size)
+    candidates = load_words(size)
     constraints = ConstraintManager()
     solver = get_solver(solver_name)
+    first_guess = get_first_guess(size, solver_name)  # None for random; raises if not configured
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         if not candidates:
-            candidates = _generate_fallback_candidates(constraints, size)
+            candidates = constraints.generate_fallback_candidates(size)
             if not candidates:
                 print("No candidates left (constraints are contradictory); guess failed.")
                 return
             print(f"   [Fallback] Word list exhausted — trying {len(candidates)} constraint-satisfying combination(s)\n")
 
-        guess = solver.pick(candidates)
+        if attempt == 1 and first_guess is not None:
+            guess = first_guess
+        else:
+            guess = solver.pick(candidates)
         feedback = guess_fn(guess)
 
         _print_feedback(attempt, guess, feedback)
@@ -117,10 +92,3 @@ def _run_game(guess_fn, size: int, solver_name: str = "random") -> None:
     print(f"\nFailed to guess within {MAX_ATTEMPTS} attempts.")
 
 
-def _load_words(size: int) -> list[str]:
-    """Load words of the given length from the word list file."""
-    with open("words.txt", "r") as f:
-        filtered = [w for line in f if len(w := line.strip().lower()) == size]
-    if not filtered:
-        raise ValueError(f"No words of length {size} in word list; check words.txt")
-    return filtered

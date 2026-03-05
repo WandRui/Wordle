@@ -1,63 +1,37 @@
 """
 benchmark.py — Parallel Wordle solver benchmark.
 
-Runs each solver N times against the /random API endpoint (seeds 0 … N-1),
-with up to BATCH_SIZE concurrent games.  All three solvers play the same seeds
-so the comparison is apples-to-apples.
+Runs each configured solver N times against the /random API endpoint
+(seeds 0 … N-1), with up to BATCH_SIZE concurrent games.  All solvers play
+the same seeds so the comparison is apples-to-apples.
+
+First guesses are read from config.toml [solver.first_guess.<size>].
+Run 'python compute_first_guess.py --size N' before benchmarking a new word size.
 
 Usage:
-    python benchmark.py                        # defaults: size=5, games=1024, batch=32
+    python benchmark.py                                  # all solvers, defaults
     python benchmark.py --size 6
     python benchmark.py --games 256 --batch 16
+    python benchmark.py --solvers entropy,heuristic      # compare two solvers only
 """
 
 import argparse
 import concurrent.futures
-import itertools
-import string
+import json
+import statistics
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import api_client
-from config import FIRST_GUESS_RECOMPUTE_GAMES, MAX_ATTEMPTS, SOLVERS
-from constraint import ConstraintManager
+from config import EVAL_LIMIT, HEURISTIC_PRESAMPLE, MAX_ATTEMPTS, SOLVERS, get_first_guess
+from constraint import ConstraintManager, WORDS_FILE, load_words
 from solver import get_solver
-
-WORDS_FILE = Path(__file__).parent / "words.txt"
-
-
-# ---------------------------------------------------------------------------
-# Helpers reused from game.py (inlined here to avoid importing private names)
-# ---------------------------------------------------------------------------
-
-def _load_words(size: int) -> list[str]:
-    with WORDS_FILE.open() as f:
-        words = [w for line in f if len(w := line.strip().lower()) == size]
-    if not words:
-        raise ValueError(f"No {size}-letter words found in {WORDS_FILE}")
-    return words
 
 
 def _is_solved(feedback: list[dict]) -> bool:
     return all(item["result"] == "correct" for item in feedback)
-
-
-def _generate_fallback_candidates(constraints: ConstraintManager, size: int) -> list[str]:
-    alphabet = set(string.ascii_lowercase)
-    truly_absent = constraints.absent - constraints.present
-    position_options: list[list[str]] = []
-    for i in range(size):
-        if i in constraints.correct:
-            position_options.append([constraints.correct[i]])
-        else:
-            forbidden = truly_absent | constraints.not_at.get(i, set())
-            position_options.append(sorted(alphabet - forbidden))
-    return [
-        "".join(combo)
-        for combo in itertools.product(*position_options)
-        if all(letter in combo for letter in constraints.present)
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +58,7 @@ def run_game(
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         if not candidates:
-            candidates = _generate_fallback_candidates(constraints, size)
+            candidates = constraints.generate_fallback_candidates(size)
             if not candidates:
                 return None
 
@@ -117,44 +91,34 @@ def run_solver_benchmark(
     seeds: list[int],
     size: int,
     batch_size: int,
-    recompute_every: int,
 ) -> list[int | None]:
     """Submit all games for one solver to the thread pool; return results in seed order.
 
-    recompute_every controls how many games share the same pre-computed first guess.
-    It is expressed in games, not batches, so changing batch_size does not affect
-    how often the first guess is refreshed.  Set to 0 to compute only once.
-    The final group may contain fewer games than recompute_every; that is fine
-    because ThreadPoolExecutor accepts any number of tasks regardless of max_workers.
+    The first guess is read from config.toml [solver.first_guess.<size>] so it is
+    fixed, reproducible, and computed only once offline by compute_first_guess.py.
+    For the random solver, no fixed first guess is used.
     """
+    first_guess = get_first_guess(size, solver_name)  # raises if not configured
+
+    if first_guess:
+        print(f"  First guess (from config): '{first_guess}'")
+    else:
+        print(f"  First guess: random (computed per game)")
+
     n = len(seeds)
     results: list[int | None] = [None] * n
-
-    # group_size is in games; recompute_every=0 means one computation for all games.
-    group_size = recompute_every if recompute_every > 0 else n
-
     completed = 0
-    group_starts = list(range(0, n, group_size))
-    n_groups = len(group_starts)
 
-    for g_num, group_start in enumerate(group_starts, start=1):
-        group_indices = list(range(group_start, min(group_start + group_size, n)))
-
-        group_label = f" (group {g_num}/{n_groups})" if n_groups > 1 else ""
-        print(f"  Pre-computing first guess{group_label} … ", end="", flush=True)
-        first_guess = get_solver(solver_name).pick(list(words))
-        print(f"'{first_guess}'")
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as pool:
-            future_map = {
-                pool.submit(run_game, words, solver_name, seeds[idx], size, first_guess): idx
-                for idx in group_indices
-            }
-            for future in concurrent.futures.as_completed(future_map):
-                idx = future_map[future]
-                results[idx] = future.result()
-                completed += 1
-                _print_progress(completed, n)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as pool:
+        future_map = {
+            pool.submit(run_game, words, solver_name, seeds[idx], size, first_guess): idx
+            for idx in range(n)
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            idx = future_map[future]
+            results[idx] = future.result()
+            completed += 1
+            _print_progress(completed, n)
 
     print()  # newline after progress bar
     return results
@@ -170,42 +134,87 @@ def _print_progress(done: int, total: int, width: int = 40) -> None:
 # Statistics printer
 # ---------------------------------------------------------------------------
 
-def print_solver_stats(solver_name: str, results: list[int | None], elapsed: float) -> float:
-    """Print per-solver stats and return average attempts (inf if nothing solved)."""
+def print_solver_stats(solver_name: str, results: list[int | None], elapsed: float) -> dict:
+    """Print per-solver stats and return a summary dict for the final comparison table."""
     solved = [r for r in results if r is not None]
-    n_total  = len(results)
-    n_solved = len(solved)
-    n_failed = n_total - n_solved
+    n_total    = len(results)
+    n_solved   = len(solved)
+    n_failed   = n_total - n_solved
+    solve_rate = 100 * n_solved / n_total
+
+    # Penalised average: failures count as MAX_ATTEMPTS so every game is included.
+    avg_penalised = (sum(solved) + n_failed * MAX_ATTEMPTS) / n_total
+    avg_solved    = sum(solved) / n_solved if n_solved else float("inf")
+    effective     = [r if r is not None else MAX_ATTEMPTS for r in results]
+    std_penalised = statistics.stdev(effective) if len(effective) >= 2 else 0.0
 
     print(f"\n  Solver : {solver_name}")
-    print(f"  Played : {n_total}  |  Solved: {n_solved} ({100 * n_solved / n_total:.1f}%)"
+    print(f"  Played : {n_total}  |  Solved: {n_solved} ({solve_rate:.1f}%)"
           f"  |  Failed: {n_failed}")
 
     if not solved:
         print("  (no games solved — cannot compute average)")
-        return float("inf")
+        return {"name": solver_name, "solve_rate": 0.0,
+                "avg_penalised": float("inf"), "avg_solved": float("inf"),
+                "std": 0.0, "elapsed": elapsed, "results": results}
 
-    avg = sum(solved) / n_solved
     dist = Counter(solved)
     dist_str = "  ".join(f"{k}×{v}" for k, v in sorted(dist.items()))
-    print(f"  Avg    : {avg:.3f} guesses")
-    print(f"  Dist   : {dist_str}")
-    print(f"  Time   : {elapsed:.1f}s  ({elapsed / n_total:.2f}s/game)")
+    print(f"  Avg    : {avg_penalised:.3f}  Std : {std_penalised:.3f}  "
+          f"(solved-only: {avg_solved:.3f}  |  failures penalised as {MAX_ATTEMPTS})")
+    print(f"  Dist   : {dist_str}"
+          + (f"  +{n_failed}×DNF" if n_failed else ""))
+    print(f"  Time   : {elapsed:.1f}s  ({n_total} games)")
 
-    return avg
+    return {"name": solver_name, "solve_rate": solve_rate,
+            "avg_penalised": avg_penalised, "avg_solved": avg_solved,
+            "std": std_penalised, "elapsed": elapsed, "results": results}
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _print_comparison_table_full(stats: list[dict], n_games: int, total_elapsed: float) -> None:
+    """Print a side-by-side comparison table of all solver results.
+
+    Primary sort: avg_penalised (failures count as MAX_ATTEMPTS) ascending.
+    Failures are never discarded — penalising them keeps the comparison fair.
+    """
+    ranked = sorted(stats, key=lambda s: (s["avg_penalised"], -s["solve_rate"]))
+    medals = ["1st", "2nd", "3rd"]
+
+    col = max((len(s["name"]) for s in stats), default=6)
+    col = max(col, 9)
+
+    header = (f"  {'Rank':<5}  {'Solver':<{col}}  {'Avg(+pen)':>9}  {'Std':>6}  "
+              f"{'Avg(solved)':>11}  {'Solve%':>7}  {'Wall time':>9}")
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+
+    for i, s in enumerate(ranked):
+        rank_label  = medals[i] if i < len(medals) else f"#{i + 1}"
+        pen_str     = f"{s['avg_penalised']:.3f}" if s["avg_penalised"] != float("inf") else "N/A"
+        std_str     = f"{s['std']:.3f}" if s.get("std") is not None else "N/A"
+        solved_str  = f"{s['avg_solved']:.3f}"    if s["avg_solved"]    != float("inf") else "N/A"
+        time_str    = f"{s['elapsed']:.1f}s"
+        print(f"  {rank_label:<5}  {s['name']:<{col}}  {pen_str:>9}  {std_str:>6}  "
+              f"{solved_str:>11}  {s['solve_rate']:>6.1f}%  {time_str:>9}")
+
+    print(f"\n  Avg(+pen)   = avg guesses counting failures as {MAX_ATTEMPTS} (primary rank)")
+    print(f"  Std         = std dev of penalised attempts (for variance)")
+    print(f"  Avg(solved) = avg guesses over solved games only (reference)")
+    print(f"\n  Total wall time: {total_elapsed:.1f}s  "
+          f"({n_games} games × {len(stats)} solvers)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Benchmark all Wordle solvers (random / entropy / minimax) by running them "
-            "in parallel against the /random API endpoint.  All solvers play the same "
-            "seeds so the comparison is apples-to-apples.  Results include solve rate, "
-            "average guesses, attempt distribution, and wall time."
+            "Benchmark Wordle solvers by running them in parallel against the /random "
+            "API endpoint.  All solvers play the same seeds so the comparison is "
+            "apples-to-apples.  Results include solve rate, average guesses, attempt "
+            "distribution, and wall time."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -218,54 +227,104 @@ def main() -> None:
         help="Number of games (seeds 0 … N-1) each solver will play.",
     )
     parser.add_argument(
-        "--batch", type=int, default=64,
+        "--batch", type=int, default=128,
         help="Maximum number of games running concurrently in the thread pool.",
     )
     parser.add_argument(
-        "--recompute", type=int, default=FIRST_GUESS_RECOMPUTE_GAMES,
+        "--solvers", type=str, default=None,
+        metavar="S1,S2,…",
         help=(
-            "Re-compute the first guess every this many games (independent of --batch). "
-            "0 = compute once for all games (original behaviour). "
-            "Reducing this value averages over more first-guess samples, lowering cross-run variance."
+            "Comma-separated list of solvers to benchmark "
+            f"(default: all configured — {', '.join(SOLVERS)}). "
+            "Example: --solvers entropy,heuristic"
+        ),
+    )
+    parser.add_argument(
+        "--output", type=str, default=None, metavar="FILE",
+        help=(
+            "Write full results (per-game attempt counts, std, meta) to a JSON file "
+            "for plotting or analysis.  E.g. --output results/run.json"
         ),
     )
     args = parser.parse_args()
 
+    # Resolve solver list
+    if args.solvers:
+        from solver import SOLVERS as _ALL_SOLVERS
+        requested = [s.strip() for s in args.solvers.split(",") if s.strip()]
+        unknown = [s for s in requested if s not in _ALL_SOLVERS]
+        if unknown:
+            parser.error(f"Unknown solver(s): {unknown}. "
+                         f"Available: {list(_ALL_SOLVERS)}")
+        solver_names = requested
+    else:
+        solver_names = list(SOLVERS)
+
     print(f"Loading {args.size}-letter words from {WORDS_FILE.name} …")
-    words = _load_words(args.size)
+    words = load_words(args.size)
     print(f"  {len(words):,} words loaded.\n")
 
     # All solvers play the same seeds → fair comparison
     seeds = list(range(args.games))
 
-    recompute_label = f"every {args.recompute} games" if args.recompute > 0 else "once"
-    print(f"Benchmark: {args.games} games × {len(SOLVERS)} solvers"
-          f"  |  batch={args.batch}  |  word size={args.size}"
-          f"  |  first-guess recompute={recompute_label}")
-    print("=" * 60)
+    print(f"Benchmark: {args.games} games × {len(solver_names)} solver(s)"
+          f"  |  batch={args.batch}  |  word size={args.size}")
+    print(f"Params   : eval_limit={EVAL_LIMIT}  |  max_attempts={MAX_ATTEMPTS}"
+          f"  |  heuristic_presample={HEURISTIC_PRESAMPLE}  |  first-guess: first_guesses.json")
+    print(f"Solvers  : {', '.join(solver_names)}")
+    print("=" * 65)
 
-    summary: dict[str, float] = {}
+    all_stats: list[dict] = []
     wall_start = time.perf_counter()
 
-    for solver_name in SOLVERS:
+    for solver_name in solver_names:
         print(f"\n▶  {solver_name.upper()} solver")
         t0 = time.perf_counter()
-        results = run_solver_benchmark(solver_name, words, seeds, args.size, args.batch, args.recompute)
+        results = run_solver_benchmark(solver_name, words, seeds, args.size, args.batch)
         elapsed = time.perf_counter() - t0
-        avg = print_solver_stats(solver_name, results, elapsed)
-        summary[solver_name] = avg
+        stats = print_solver_stats(solver_name, results, elapsed)
+        all_stats.append(stats)
 
     total_elapsed = time.perf_counter() - wall_start
 
-    print("\n" + "=" * 60)
-    print("FINAL RANKING  (average guesses, lower is better)\n")
-    ranking = sorted(summary.items(), key=lambda kv: kv[1])
-    for rank, (name, avg) in enumerate(ranking, start=1):
-        marker = "🥇" if rank == 1 else ("🥈" if rank == 2 else "🥉")
-        avg_str = f"{avg:.3f}" if avg != float("inf") else "N/A"
-        print(f"  {marker}  #{rank}  {name:8s}  {avg_str} avg guesses")
+    print("\n" + "=" * 65)
+    print("COMPARISON  (ranked by avg(+pen) ↑, then solve rate ↓)\n")
+    _print_comparison_table_full(all_stats, args.games, total_elapsed)
 
-    print(f"\nTotal wall time: {total_elapsed:.1f}s")
+    if args.output:
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _json_val(x):  # float("inf") not JSON-serialisable
+            return x if x != float("inf") and x == x else None  # None for inf/NaN
+
+        export = {
+            "meta": {
+                "games": args.games,
+                "size": args.size,
+                "batch": args.batch,
+                "eval_limit": EVAL_LIMIT,
+                "max_attempts": MAX_ATTEMPTS,
+                "heuristic_presample": HEURISTIC_PRESAMPLE,
+                "total_wall_s": round(total_elapsed, 2),
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            "solvers": [
+                {
+                    "name": s["name"],
+                    "solve_rate": round(s["solve_rate"], 2),
+                    "avg_penalised": _json_val(s["avg_penalised"]) if s["avg_penalised"] != float("inf") else None,
+                    "avg_solved": _json_val(s["avg_solved"]) if s.get("avg_solved") != float("inf") else None,
+                    "std": s.get("std"),
+                    "elapsed_s": round(s["elapsed"], 2),
+                    "results": s.get("results"),  # list of int or null (DNF)
+                }
+                for s in all_stats
+            ],
+        }
+        with out_path.open("w") as f:
+            json.dump(export, f, indent=2)
+        print(f"\n  Results written to {out_path}  (use for histograms / variance analysis)")
 
 
 if __name__ == "__main__":

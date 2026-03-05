@@ -46,7 +46,17 @@ max_attempts = 16
 # random sub-sample of this size is evaluated instead.
 # Effect on runtime: per-guess cost grows as O(eval_limit²).
 # Raise for better accuracy (slower); lower for faster benchmarks.
-eval_limit = 300
+eval_limit = 32
+
+# HeuristicSolver only: when the candidate pool exceeds this value, do not
+# score and sort all candidates.  Instead, randomly sample heuristic_presample
+# candidates, then score and sort only that subset and take the top eval_limit.
+# 0 = rank over all candidates (current behaviour; slower, best quality).
+# e.g. 500 = sample 500, rank them, take top eval_limit (faster, slight quality trade-off).
+heuristic_presample = 0
+
+# First guesses are stored in first_guesses.json.
+# Run 'python compute_first_guess.py --size 5' to populate it.
 
 # ----------------------------------------------------------------
 # [benchmark]  Parameters consumed by benchmark.py
@@ -55,13 +65,4 @@ eval_limit = 300
 
 # Ordered list of solver names to include in each benchmark run.
 # Must match the keys registered in solver.SOLVERS.
-solvers = ["random", "entropy", "minimax"]
-
-# Re-compute the first guess every this many games.
-# Independent of batch_size: changing concurrency does not affect how
-# often the first guess is refreshed.
-# With the default games=1024 and recompute_every=256, the first guess is
-# computed 4 times per run, averaging over multiple samples and reducing
-# cross-run variance caused by the solver's internal randomness.
-# Set to 0 to compute the first guess only once for all games.
-first_guess_recompute_games = 256
+solvers = ["random", "entropy", "minimax", "heuristic"]

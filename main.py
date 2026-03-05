@@ -8,17 +8,16 @@ Usage examples:
   python main.py random --size 6 --solver minimax
   python main.py word --answer crane --solver entropy
 
-Solvers:
-  random   Pick a random candidate (default, fast)
-  entropy  Maximise expected information gain each guess
-  minimax  Minimise the worst-case remaining pool each guess
+Available solvers are defined in solver.py and loaded dynamically.
+Run 'python main.py --help' to see the current list.
 """
 
 import argparse
 import random
 from game import play_daily, play_random, play_word
+from solver import SOLVERS
 
-SOLVER_CHOICES = ["random", "entropy", "minimax"]
+SOLVER_CHOICES = list(SOLVERS)  # single source of truth: solver.py
 
 
 def _add_solver_arg(parser: argparse.ArgumentParser) -> None:
@@ -33,24 +32,25 @@ def build_parser() -> argparse.ArgumentParser:
         prog="wordle-solver",
         description="CLI tool to automatically solve Wordle puzzles",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Modes:
-  daily   Guess today's daily puzzle (same answer for a given size each day)
-  random  Guess a random puzzle (seed is random in 0–2047 unless --seed is given)
-  word    Guess a custom answer (use --answer to specify; useful for debugging)
-
-Solvers:
-  random   Pick a random candidate — fast, no strategy (default)
-  entropy  Maximise expected information gain each guess
-  minimax  Minimise the worst-case remaining pool each guess
-
-Examples:
-  python main.py daily
-  python main.py daily --size 6 --solver entropy
-  python main.py random --solver minimax
-  python main.py random --seed 7 --solver minimax
-  python main.py word --answer crane --solver entropy
-        """,
+        epilog=(
+            "Modes:\n"
+            "  daily   Guess today's daily puzzle\n"
+            "  random  Guess a random puzzle (seed is random in 0–2047 unless --seed given)\n"
+            "  word    Guess a custom answer (use --answer; useful for debugging)\n"
+            "\n"
+            "Solvers (from solver.py):\n"
+            + "".join(
+                f"  {name:<10} {cls.__doc__.strip().splitlines()[0]}\n"
+                for name, cls in SOLVERS.items()
+            )
+            + "\n"
+            "Examples:\n"
+            "  python main.py daily\n"
+            "  python main.py daily --size 6 --solver entropy\n"
+            "  python main.py random --solver minimax\n"
+            "  python main.py random --seed 7 --solver minimax\n"
+            "  python main.py word --answer crane --solver entropy\n"
+        ),
     )
 
     subparsers = parser.add_subparsers(dest="mode", metavar="MODE", required=True)

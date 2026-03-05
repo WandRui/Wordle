@@ -1,0 +1,27 @@
+{
+  "3": {
+    "entropy": "sae",
+    "heuristic": "sae",
+    "minimax": "iao"
+  },
+  "4": {
+    "entropy": "sare",
+    "heuristic": "sare",
+    "minimax": "orae"
+  },
+  "5": {
+    "entropy": "tares",
+    "heuristic": "tares",
+    "minimax": "raise"
+  },
+  "6": {
+    "entropy": "caries",
+    "heuristic": "caries",
+    "minimax": "laiser"
+  },
+  "7": {
+    "entropy": "tarlies",
+    "heuristic": "tarlies",
+    "minimax": "tarlies"
+  }
+}

@@ -24,3 +24,5 @@ build/
 
 # Environment variables
 .env
+
+wordle-solver.zip
