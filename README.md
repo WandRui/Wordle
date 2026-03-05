@@ -327,19 +327,21 @@ main.py / benchmark.py
 
 ## Benchmark Results
 
-Results from a full run on a 5-letter word list (15,921 words, 1,024 games per solver, `batch=128`):
+Results from a full run on a 5-letter word list (1,024 games per solver, `batch=128`, `eval_limit=32`):
 
-| Solver | Solve Rate | Avg Guesses | Wall Time |
-|---|---|---|---|
-| **entropy** | 98.6 % | **4.851** | 256.8 s |
-| **heuristic** | 98.8 % | 4.902 | 241.3 s |
-| **minimax** | 99.0 % | 5.043 | 264.5 s |
-| **random** | 98.1 % | 5.437 | 88.7 s |
+| Rank | Solver | Solve Rate | Avg(+pen) | Std | Avg(solved) | Wall Time |
+|---|---|---|---|---|---|---|
+| 1st | **heuristic** | 99.0 % | **4.993** | 2.374 | 4.885 | 67.8 s |
+| 2nd | **entropy** | 98.9 % | 5.015 | 2.431 | 4.895 | 73.3 s |
+| 3rd | **minimax** | **99.5 %** | 5.120 | 2.402 | 5.067 | 65.8 s |
+| 4th | **random** | 99.0 % | 5.642 | 2.439 | 5.539 | 66.1 s |
 
-- `entropy` achieves the lowest average guess count among the scored strategies.
-- `heuristic` matches `entropy` quality while being faster due to frequency-ranked pre-filtering instead of random sub-sampling.
+> `Avg(+pen)` = primary ranking metric; failures count as `max_attempts` (16) so every game is included. `Avg(solved)` = average over solved games only.
+
+- `heuristic` achieves the lowest penalised average, outperforming `entropy` while running slightly faster — the frequency-ranked pre-filter consistently surfaces better candidates than random sub-sampling.
 - `minimax` achieves the highest solve rate (fewest failures), at a small cost in average guesses.
-- `random` is ~3× faster due to no per-guess computation, making it practical for quick sanity checks.
+- `entropy` and `heuristic` are comparable in quality; `entropy` has marginally higher variance due to random sub-sampling.
+- `random` has zero per-guess computation overhead, making it practical for quick sanity checks.
 
 Full attempt distributions can be exported and visualised:
 
